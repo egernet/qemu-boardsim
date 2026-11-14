@@ -316,6 +316,13 @@ static void esp32c3_machine_init(MachineState *machine)
                              ESP32C3_INTERNAL_SRAM0_SIZE, memmap[ESP32C3_MEMREGION_DRAM].size);
     memory_region_add_subregion(sys_mem, memmap[ESP32C3_MEMREGION_DRAM].base, dram);
 
+    /* The esptool flasher stub touches the area right after SRAM1 on the data
+     * bus (0x3FCE0000) while it decompresses. Back it with RAM so `write_flash`
+     * with the stub - what `idf.py flash` uses - does not fault. */
+    MemoryRegion *dram_tail = g_new(MemoryRegion, 1);
+    memory_region_init_ram(dram_tail, NULL, "esp32c3.dram_tail", 0x20000, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[ESP32C3_MEMREGION_DRAM].base + memmap[ESP32C3_MEMREGION_DRAM].size, dram_tail);
+
     /* Initialize RTC Fast Memory as regular RAM */
     MemoryRegion *rtcram = g_new(MemoryRegion, 1);
     memory_region_init_ram(rtcram, NULL, "esp32c3.rtcram", memmap[ESP32C3_MEMREGION_RTCFAST].size, &error_fatal);
