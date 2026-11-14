@@ -32,6 +32,9 @@
  *              R <gpio> <tick ps> <n> <items>   one RMT transmission, n 32-bit items in hex
  *              B                                the chip was reset
  *   from host: I <in hex>                       levels of the input pins
+ *              S <strap hex>                    strapping value for the next boot
+ *              H 1 | H 0                        hold the chip in reset / release it (boots)
+ *              X                                reset now
  */
 typedef struct ESP32C3State {
     SysBusDevice parent_obj;

@@ -21,6 +21,7 @@
 #include "hw/qdev-properties.h"
 #include "hw/qdev-properties-system.h"
 #include "hw/gpio/esp32c3_gpio.h"
+#include "sysemu/runstate.h"
 
 #define A_GPIO_OUT          0x0004
 #define A_GPIO_OUT_W1TS     0x0008
@@ -169,6 +170,23 @@ static void gpio_receive(void *opaque, const uint8_t *buf, int size)
             s->rx[s->rx_len] = 0;
             if (s->rx[0] == 'I' && s->rx[1] == ' ') {
                 s->in_ext = strtoul(s->rx + 2, NULL, 16) & PIN_MASK;
+            } else if (s->rx[0] == 'S' && s->rx[1] == ' ') {
+                /* Strapping pins as sampled at the next reset (0x08 flash boot, 0x02 UART download). */
+                s->strap_mode = strtoul(s->rx + 2, NULL, 16);
+            } else if (s->rx[0] == 'H' && s->rx[1] == ' ') {
+                /* CHIP_EN: held low stops the chip; released, it boots again. */
+                if (s->rx[2] == '1') {
+                    if (runstate_is_running()) {
+                        vm_stop(RUN_STATE_PAUSED);
+                    }
+                } else {
+                    qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+                    if (!runstate_is_running()) {
+                        vm_start();
+                    }
+                }
+            } else if (s->rx[0] == 'X') {
+                qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
             }
             s->rx_len = 0;
         } else if (c != '\r') {
