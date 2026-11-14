@@ -22,6 +22,7 @@
 #include "hw/qdev-properties-system.h"
 #include "hw/gpio/esp32c3_gpio.h"
 #include "sysemu/runstate.h"
+#include "qemu/timer.h"
 
 #define A_GPIO_OUT          0x0004
 #define A_GPIO_OUT_W1TS     0x0008
@@ -49,8 +50,9 @@ static void gpio_report_pins(ESP32C3GPIOState *s)
     if (s->sent_any && s->sent_out == s->out && s->sent_enable == s->enable) {
         return;
     }
-    char line[48];
-    snprintf(line, sizeof(line), "O %x %x\n", s->out & PIN_MASK, s->enable & PIN_MASK);
+    char line[64];
+    snprintf(line, sizeof(line), "O %x %x %" PRId64 "\n", s->out & PIN_MASK, s->enable & PIN_MASK,
+             qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
     gpio_send(s, line);
     s->sent_out = s->out;
     s->sent_enable = s->enable;
@@ -75,7 +77,7 @@ void esp32c3_gpio_report_rmt(ESP32C3GPIOState *s, int channel, uint32_t tick_ps,
     for (int i = 0; i < count; i++) {
         g_string_append_printf(str, "%08x", items[i]);
     }
-    g_string_append_c(str, '\n');
+    g_string_append_printf(str, " %" PRId64 "\n", qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
     qemu_chr_fe_write_all(&s->chr, (const uint8_t *)str->str, str->len);
     g_string_free(str, true);
 }

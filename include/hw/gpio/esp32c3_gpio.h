@@ -27,9 +27,9 @@
  * the command line), it reports pin changes and RMT transmissions as text
  * lines and takes input levels back:
  *
- *   to host:   O <out hex> <enable hex>        output or enable changed
+ *   to host:   O <out hex> <enable hex> <t>    output or enable changed (t: virtual time, ns)
  *              M <gpio> <signal>                matrix output selection changed
- *              R <gpio> <tick ps> <n> <items>   one RMT transmission, n 32-bit items in hex
+ *              R <gpio> <tick ps> <n> <items> <t>  one RMT transmission (n 32-bit items in hex), t = end, ns
  *              B                                the chip was reset
  *   from host: I <in hex>                       levels of the input pins
  *              S <strap hex>                    strapping value for the next boot
