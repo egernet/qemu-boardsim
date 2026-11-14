@@ -34,6 +34,7 @@
 #include "hw/char/esp32c3_uart.h"
 #include "hw/gpio/esp32c3_gpio.h"
 #include "hw/misc/esp32c3_rmt.h"
+#include "hw/misc/esp32c3_saradc.h"
 #include "chardev/char.h"
 #include "hw/nvram/esp32c3_efuse.h"
 #include "hw/riscv/esp32c3_clk.h"
@@ -75,6 +76,7 @@ struct Esp32C3MachineState {
     ESP32C3UARTState uart[ESP32C3_UART_COUNT];
     ESP32C3GPIOState gpio;
     ESP32C3RmtState rmt;
+    ESP32C3SarAdcState saradc;
     ESP32C3CacheState cache;
     ESP32C3EfuseState efuse;
     ESP32C3ClockState clock;
@@ -347,6 +349,7 @@ static void esp32c3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "intmatrix", &ms->intmatrix, TYPE_ESP32C3_INTMATRIX);
     object_initialize_child(OBJECT(machine), "gpio", &ms->gpio, TYPE_ESP32C3_GPIO);
     object_initialize_child(OBJECT(machine), "rmt", &ms->rmt, TYPE_ESP32C3_RMT);
+    object_initialize_child(OBJECT(machine), "saradc", &ms->saradc, TYPE_ESP32C3_SARADC);
     /* BoardSim pin bridge: -chardev socket,id=boardsim,... */
     {
         Chardev *boardsim = qemu_chr_find("boardsim");
@@ -437,6 +440,13 @@ static void esp32c3_machine_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(&ms->gpio), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_GPIO_BASE, mr, 0);
+    }
+
+    /* SAR ADC realization */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ms->saradc), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->saradc), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_APB_SARADC_BASE, mr, 0);
     }
 
     /* RMT realization */
