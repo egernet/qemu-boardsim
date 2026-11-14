@@ -19,6 +19,8 @@ typedef struct ESP32C3RmtTx {
     uint32_t rd;            /* read pointer, in words from the channel's first block */
     uint32_t since_thr;     /* items sent since the last threshold event */
     uint32_t pending;       /* interrupt bits to raise when the timer fires */
+    bool wrapped;           /* read pointer has gone round the RAM once */
+    uint64_t stall_ns;      /* time spent waiting for the driver to refill */
     bool pending_end;
     uint32_t *items;        /* everything sent in this transmission */
     int count;
@@ -45,7 +47,9 @@ typedef struct ESP32C3RmtState {
     uint32_t sys_conf;
     uint32_t ref_cnt;
     uint32_t mem[ESP32C3_RMT_CHANNELS * ESP32C3_RMT_BLOCK_WORDS];
+    bool fresh[ESP32C3_RMT_CHANNELS * ESP32C3_RMT_BLOCK_WORDS]; /* written since last sent */
 
     ESP32C3RmtTx tx[ESP32C3_RMT_TX_CHANNELS];
     ESP32C3GPIOState *gpio;
+    uint32_t time_scale;    /* RMT time runs this many times slower than real */
 } ESP32C3RmtState;

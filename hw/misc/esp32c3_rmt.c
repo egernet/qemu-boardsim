@@ -14,6 +14,7 @@
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "hw/misc/esp32c3_rmt.h"
 
 /* Register offsets (soc/rmt_reg.h) */
@@ -58,9 +59,6 @@
 #define INT_TX_END(ch)      (1u << (ch))
 #define INT_TX_THR(ch)      (1u << (8 + (ch)))
 
-/* Hold back long runs so the CPU gets time to refill RAM between events. */
-#define MAX_ITEMS_PER_STEP  ESP32C3_RMT_BLOCK_WORDS
-
 static void rmt_update_irq(ESP32C3RmtState *s)
 {
     qemu_set_irq(s->irq, (s->int_raw & s->int_ena) != 0);
@@ -97,9 +95,10 @@ static void rmt_append(ESP32C3RmtTx *t, uint32_t item)
 }
 
 /*
- * Reads items from the current position up to the next event (threshold,
- * end, or a batch limit), then arms the timer for when the hardware would
- * have sent them.
+ * Sends one item, the way the hardware does: the item is read from RAM when
+ * its turn comes, so the driver's refill interrupt has the time of the
+ * remaining items to write the next half. The timer fires when the item has
+ * been sent; threshold and end interrupts are raised then.
  */
 static void rmt_step(ESP32C3RmtState *s, int ch)
 {
@@ -108,45 +107,56 @@ static void rmt_step(ESP32C3RmtState *s, int ch)
     uint32_t span = rmt_span(s, ch);
     uint32_t limit = s->tx_lim[ch] & 0x1ff;
     bool wrap = s->conf0[ch] & CONF0_WRAP_EN;
-    uint64_t ticks = 0;
 
     t->pending = 0;
     t->pending_end = false;
 
-    for (int n = 0; n < MAX_ITEMS_PER_STEP; n++) {
-        uint32_t item = s->mem[(base + t->rd) % RAM_WORDS];
-        uint32_t d0 = item & 0x7fff;
-        uint32_t d1 = (item >> 16) & 0x7fff;
+    uint32_t idx = (base + t->rd) % RAM_WORDS;
+    /* After the first pass through RAM, a word the driver has not written
+     * again since we last sent it means its refill interrupt is running
+     * late. Wait for it (up to 2 ms) instead of sending stale data. */
+    if (t->wrapped && !s->fresh[idx] && t->stall_ns < 2000000) {
+        t->stall_ns += 2000;
+        timer_mod(t->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 2000);
+        return;
+    }
+    t->stall_ns = 0;
+    s->fresh[idx] = false;
 
-        if (d0 == 0) {
-            t->pending_end = true;
-            break;
-        }
-        rmt_append(t, item);
-        ticks += d0 + d1;
-        if (d1 == 0) {
-            t->pending_end = true;
-            break;
-        }
+    uint32_t item = s->mem[idx];
+    uint32_t d0 = item & 0x7fff;
+    uint32_t d1 = (item >> 16) & 0x7fff;
 
+    if (d0 == 0) {
+        /* End marker: nothing more to send. */
+        t->pending_end = true;
+        timer_mod(t->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1);
+        return;
+    }
+    rmt_append(t, item);
+    if (d1 == 0) {
+        t->pending_end = true;
+    } else {
         t->rd++;
         t->since_thr++;
         if (t->rd >= span) {
-            if (!wrap) {
+            if (wrap) {
+                t->rd = 0;
+                t->wrapped = true;
+            } else {
                 /* Ran off the end without an end marker: the hardware stops too. */
                 t->pending_end = true;
-                break;
             }
-            t->rd = 0;
         }
         if (wrap && limit && t->since_thr >= limit) {
             t->since_thr = 0;
             t->pending |= INT_TX_THR(ch);
-            break;
         }
     }
 
-    uint64_t delay_ns = ticks * rmt_tick_ps(s, ch) / 1000;
+    /* Emulated code runs slower than the real chip, so stretch RMT time to
+     * give the refill interrupt the head start it has on hardware. */
+    uint64_t delay_ns = (uint64_t)(d0 + d1) * rmt_tick_ps(s, ch) / 1000 * MAX(s->time_scale, 1);
     timer_mod(t->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + MAX(delay_ns, 1));
 }
 
@@ -156,6 +166,8 @@ static void rmt_tx_start(ESP32C3RmtState *s, int ch)
 {
     ESP32C3RmtTx *t = &s->tx[ch];
     t->active = true;
+    t->wrapped = false;
+    t->stall_ns = 0;
     t->since_thr = 0;
     t->count = 0;
     rmt_step(s, ch);
@@ -165,6 +177,11 @@ static void rmt_tx_finish(ESP32C3RmtState *s, int ch)
 {
     ESP32C3RmtTx *t = &s->tx[ch];
     t->active = false;
+    /* Whatever is left in this channel's RAM is old from now on. */
+    uint32_t base = ch * ESP32C3_RMT_BLOCK_WORDS;
+    for (uint32_t i = 0; i < rmt_span(s, ch); i++) {
+        s->fresh[(base + i) % RAM_WORDS] = false;
+    }
     if (s->gpio) {
         esp32c3_gpio_report_rmt(s->gpio, ch, rmt_tick_ps(s, ch), t->items, t->count);
     }
@@ -253,6 +270,7 @@ static void esp32c3_rmt_write(void *opaque, hwaddr addr, uint64_t value, unsigne
 
     if (addr >= A_RAM && addr < A_RAM + RAM_WORDS * 4) {
         s->mem[(addr - A_RAM) / 4] = v;
+        s->fresh[(addr - A_RAM) / 4] = true;
         return;
     }
     switch (addr) {
@@ -320,9 +338,15 @@ static void esp32c3_rmt_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq);
 }
 
+static Property esp32c3_rmt_properties[] = {
+    DEFINE_PROP_UINT32("time_scale", ESP32C3RmtState, time_scale, 1),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void esp32c3_rmt_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    device_class_set_props(dc, esp32c3_rmt_properties);
     dc->reset = esp32c3_rmt_reset;
     dc->realize = esp32c3_rmt_realize;
 }
