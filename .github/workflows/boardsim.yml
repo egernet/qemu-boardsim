@@ -24,7 +24,7 @@ jobs:
           - platform: windows-x64
             runs_on: windows-2022
           - platform: macos-arm64
-            runs_on: macos-14
+            runs_on: macos-latest
     runs-on: ${{ matrix.runs_on }}
     env:
       BOARDSIM_PLATFORM: ${{ matrix.platform }}
@@ -52,13 +52,14 @@ jobs:
         if: startsWith(matrix.platform, 'windows')
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           cache: true
           install: >-
             diffutils git zip
-            mingw-w64-x86_64-gcc mingw-w64-x86_64-glib2 mingw-w64-x86_64-libgcrypt
-            mingw-w64-x86_64-libiconv mingw-w64-x86_64-libslirp mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-pixman mingw-w64-x86_64-pkg-config mingw-w64-x86_64-python
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-glib2 mingw-w64-ucrt-x86_64-libgcrypt
+            mingw-w64-ucrt-x86_64-libiconv mingw-w64-ucrt-x86_64-libslirp mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pixman mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-distlib
 
       - name: Build (Linux, macOS)
         if: "!startsWith(matrix.platform, 'windows')"
