@@ -59,7 +59,7 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-glib2 mingw-w64-ucrt-x86_64-libgcrypt
             mingw-w64-ucrt-x86_64-libiconv mingw-w64-ucrt-x86_64-libslirp mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-pixman mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python
-            mingw-w64-ucrt-x86_64-python-distlib
+            mingw-w64-ucrt-x86_64-python-distlib mingw-w64-ucrt-x86_64-meson
 
       - name: Build (Linux, macOS)
         if: "!startsWith(matrix.platform, 'windows')"
