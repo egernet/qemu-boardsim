@@ -1,6 +1,7 @@
 name: 'build'
 
-on: [push, pull_request]
+# Espressif's own release build. BoardSim builds with boardsim.yml instead.
+on: [workflow_dispatch]
 
 jobs:
 

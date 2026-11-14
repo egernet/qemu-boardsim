@@ -1,0 +1,139 @@
+name: boardsim
+
+# Builds the ESP32-C3 emulator that BoardSim bundles, for every platform
+# BoardSim runs on. Each archive holds qemu/bin, qemu/lib (shared libraries
+# where needed) and qemu/share/qemu/esp32c3-rom.bin. Tags boardsim-v* make a
+# release with the archives.
+
+on:
+  push:
+    branches: [boardsim]
+    tags: ['boardsim-v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs_on: ubuntu-22.04
+          - platform: linux-arm64
+            runs_on: ubuntu-22.04-arm
+          - platform: windows-x64
+            runs_on: windows-2022
+          - platform: macos-arm64
+            runs_on: macos-14
+    runs-on: ${{ matrix.runs_on }}
+    env:
+      BOARDSIM_PLATFORM: ${{ matrix.platform }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prerequisites (Linux)
+        if: startsWith(matrix.platform, 'linux')
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential ninja-build pkg-config python3-venv \
+            libglib2.0-dev libpixman-1-dev libgcrypt20-dev libslirp-dev zlib1g-dev patchelf
+          python3 -m venv "$RUNNER_TEMP/py" && "$RUNNER_TEMP/py/bin/pip" install -q distlib tomli
+          echo "BOARDSIM_PYTHON=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"
+
+      - name: Prerequisites (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          brew install ninja pkg-config glib pixman libgcrypt libslirp
+          python3 -m venv "$RUNNER_TEMP/py" && "$RUNNER_TEMP/py/bin/pip" install -q distlib tomli
+          echo "BOARDSIM_PYTHON=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"
+
+      - name: Prerequisites (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          cache: true
+          install: >-
+            diffutils git zip
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-glib2 mingw-w64-x86_64-libgcrypt
+            mingw-w64-x86_64-libiconv mingw-w64-x86_64-libslirp mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pixman mingw-w64-x86_64-pkg-config mingw-w64-x86_64-python
+
+      - name: Build (Linux, macOS)
+        if: "!startsWith(matrix.platform, 'windows')"
+        run: |
+          .github/workflows/scripts/boardsim-configure.sh
+          ninja -C build qemu-system-riscv32
+
+      - name: Build (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: msys2 {0}
+        env:
+          MSYS: 'winsymlinks:native'
+        run: |
+          .github/workflows/scripts/boardsim-configure.sh
+          ninja -C build qemu-system-riscv32.exe
+
+      - name: Package (Linux)
+        if: startsWith(matrix.platform, 'linux')
+        run: |
+          .github/workflows/scripts/boardsim-bundle-linux.sh build . out/qemu
+          tar -czf qemu-boardsim-${{ matrix.platform }}.tar.gz -C out qemu
+
+      - name: Package (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          .github/workflows/scripts/boardsim-bundle-macos.sh build . out/qemu
+          tar -czf qemu-boardsim-${{ matrix.platform }}.tar.gz -C out qemu
+
+      - name: Package (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: msys2 {0}
+        run: |
+          mkdir -p out/qemu/bin out/qemu/share/qemu
+          cp build/qemu-system-riscv32.exe out/qemu/bin/
+          cp pc-bios/esp32c3-rom.bin out/qemu/share/qemu/
+          strip out/qemu/bin/qemu-system-riscv32.exe || true
+          echo "DLLs it loads (should be Windows' own only):"
+          ldd out/qemu/bin/qemu-system-riscv32.exe | grep -v -i -E "windows|system32" || true
+          (cd out && zip -qr ../qemu-boardsim-${{ matrix.platform }}.zip qemu)
+
+      - name: Smoke test - boot the ESP32-C3 ROM
+        shell: bash
+        run: |
+          dir=out/qemu
+          exe=$dir/bin/qemu-system-riscv32; [ -f "$exe.exe" ] && exe="$exe.exe"
+          python3 -c "open('blank.bin','wb').write(b'\xff'*4*1024*1024)"
+          "$exe" --version
+          "$exe" -L "$dir/share/qemu" -nographic -machine esp32c3 -icount 3 \
+            -drive file=blank.bin,if=mtd,format=raw -serial file:uart.log -monitor none &
+          pid=$!
+          sleep 6; kill $pid || true; sleep 1
+          head -c 400 uart.log; echo
+          grep -a -q "ESP-ROM" uart.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-boardsim-${{ matrix.platform }}
+          path: qemu-boardsim-${{ matrix.platform }}.*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/boardsim-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body: |
+            ESP32-C3 emulator for BoardSim, built from this tag for Windows (x64),
+            Linux (x64, arm64) and macOS (Apple Silicon). Each archive is
+            self-contained: qemu/bin, qemu/lib (libraries where needed) and
+            qemu/share/qemu/esp32c3-rom.bin.
