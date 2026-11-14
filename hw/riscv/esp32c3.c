@@ -33,6 +33,8 @@
 #include "hw/misc/esp32c3_cache.h"
 #include "hw/char/esp32c3_uart.h"
 #include "hw/gpio/esp32c3_gpio.h"
+#include "hw/misc/esp32c3_rmt.h"
+#include "chardev/char.h"
 #include "hw/nvram/esp32c3_efuse.h"
 #include "hw/riscv/esp32c3_clk.h"
 #include "hw/riscv/esp32c3_intmatrix.h"
@@ -72,6 +74,7 @@ struct Esp32C3MachineState {
     ESP32C3IntMatrixState intmatrix;
     ESP32C3UARTState uart[ESP32C3_UART_COUNT];
     ESP32C3GPIOState gpio;
+    ESP32C3RmtState rmt;
     ESP32C3CacheState cache;
     ESP32C3EfuseState efuse;
     ESP32C3ClockState clock;
@@ -343,6 +346,14 @@ static void esp32c3_machine_init(MachineState *machine)
 
     object_initialize_child(OBJECT(machine), "intmatrix", &ms->intmatrix, TYPE_ESP32C3_INTMATRIX);
     object_initialize_child(OBJECT(machine), "gpio", &ms->gpio, TYPE_ESP32C3_GPIO);
+    object_initialize_child(OBJECT(machine), "rmt", &ms->rmt, TYPE_ESP32C3_RMT);
+    /* BoardSim pin bridge: -chardev socket,id=boardsim,... */
+    {
+        Chardev *boardsim = qemu_chr_find("boardsim");
+        if (boardsim) {
+            qdev_prop_set_chr(DEVICE(&ms->gpio), "chardev", boardsim);
+        }
+    }
     object_initialize_child(OBJECT(machine), "extmem", &ms->cache, TYPE_ESP32C3_CACHE);
     object_initialize_child(OBJECT(machine), "efuse", &ms->efuse, TYPE_ESP32C3_EFUSE);
     object_initialize_child(OBJECT(machine), "clock", &ms->clock, TYPE_ESP32C3_CLOCK);
@@ -426,6 +437,16 @@ static void esp32c3_machine_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(&ms->gpio), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_GPIO_BASE, mr, 0);
+    }
+
+    /* RMT realization */
+    {
+        ms->rmt.gpio = &ms->gpio;
+        sysbus_realize(SYS_BUS_DEVICE(&ms->rmt), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->rmt), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_RMT_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ms->rmt), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_RMT_INTR_SOURCE));
     }
 
     /* (Extmem) Cache realization */
